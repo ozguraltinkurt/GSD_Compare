@@ -38,6 +38,8 @@ APPLICATION_TYPE_LABELS = {
     "S": "Simulation application continuation",
 }
 
+CONT_PREFIX_OVERRIDES = {"2": "sim_cont"}
+
 # ---------- low-level helpers ----------
 def pad132(s: str) -> str:
     s = s.rstrip("\r\n")
@@ -184,13 +186,27 @@ def compute_delta(old_g, new_g):
     return added, removed, modified
 
 def build_header_for_type(cols: List[Tuple[str, Optional[Tuple[int,int]]]],
-                         cont_numbers: Set[str]) -> List[str]:
-    hdr = [name for (name, _) in cols]
+                         cont_numbers: Set[str],
+                         sim_cont_numbers: Set[str]) -> List[str]:
+    hdr: List[str] = []
+    tail: List[str] = []
+    for name, _ in cols:
+        if name == "primary_1_123":
+            tail.append(name)
+        else:
+            hdr.append(name)
     for cno in sorted(cont_numbers, key=lambda x: (len(x), x)):
-        prefix = f"cont#{cno}"
+        prefix = CONT_PREFIX_OVERRIDES.get(cno, f"cont#{cno}")
         hdr.append(f"{prefix}_appl_code")
         hdr.append(f"{prefix}_appl_label")
-        hdr.append(f"{prefix}_1_123")
+        if cno in sim_cont_numbers:
+            hdr.append(f"{prefix}_sim_facility_characteristics")
+            hdr.append(f"{prefix}_sim_magnetic_variation")
+            hdr.append(f"{prefix}_sim_facility_elevation")
+            hdr.append(f"{prefix}_sim_file_record_number")
+            hdr.append(f"{prefix}_sim_cycle_date")
+        tail.append(f"{prefix}_1_123")
+    hdr.extend(tail)
     return hdr
 
 def parse_primary_fields(line: str, cols: List[Tuple[str, Optional[Tuple[int,int]]]]) -> Dict[str,Any]:
@@ -217,7 +233,7 @@ def build_row_from_group(cols: List[Tuple[str, Optional[Tuple[int,int]]]],
             row[k] = ""
     for cno in sorted(grp["cont"].keys(), key=lambda x: (len(x), x)):
         entry = grp["cont"][cno]
-        prefix = f"cont#{cno}"
+        prefix = CONT_PREFIX_OVERRIDES.get(cno, f"cont#{cno}")
         code_key = f"{prefix}_appl_code"
         label_key = f"{prefix}_appl_label"
         payload_key = f"{prefix}_1_123"
@@ -227,6 +243,22 @@ def build_row_from_group(cols: List[Tuple[str, Optional[Tuple[int,int]]]],
             row[label_key] = application_type_label(entry.get("appl", ""))
         if payload_key in header:
             row[payload_key] = payload_1_123(entry["line"])
+        if (entry.get("appl", "") or "").upper() == "S":
+            sim_fac_key = f"{prefix}_sim_facility_characteristics"
+            sim_mag_key = f"{prefix}_sim_magnetic_variation"
+            sim_elev_key = f"{prefix}_sim_facility_elevation"
+            sim_frn_key = f"{prefix}_sim_file_record_number"
+            sim_cycle_key = f"{prefix}_sim_cycle_date"
+            if sim_fac_key in header:
+                row[sim_fac_key] = slice_(entry["line"], 28, 32).strip()
+            if sim_mag_key in header:
+                row[sim_mag_key] = slice_(entry["line"], 75, 79).strip()
+            if sim_elev_key in header:
+                row[sim_elev_key] = slice_(entry["line"], 80, 84).strip()
+            if sim_frn_key in header:
+                row[sim_frn_key] = slice_(entry["line"], 124, 128).strip()
+            if sim_cycle_key in header:
+                row[sim_cycle_key] = slice_(entry["line"], 129, 132).strip()
     if postprocess_row:
         postprocess_row(row)
     for k in header:
@@ -239,11 +271,16 @@ def write_type_csvs(out_dir: str,
                     postprocess_row,
                     old_groups,
                     new_groups,
-                    extra_handler=None):
+                    extra_handler=None,
+                    context=None):
     conts=set()
+    sim_conts=set()
     for g in list(old_groups.values()) + list(new_groups.values()):
-        conts.update(g["cont"].keys())
-    base_hdr = build_header_for_type(cols, conts)
+        for cno, entry in g["cont"].items():
+            conts.add(cno)
+            if (entry.get("appl", "") or "").upper() == "S":
+                sim_conts.add(cno)
+    base_hdr = build_header_for_type(cols, conts, sim_conts)
     mod_hdr  = base_hdr + ["changed_field_count","changed_fields"]
 
     current_rows = [build_row_from_group(cols, g, base_hdr, postprocess_row) for g in new_groups.values()]
@@ -266,8 +303,12 @@ def write_type_csvs(out_dir: str,
         mod_rows.append(row)
     write_csv(os.path.join(out_dir, f"modified_{type_code}.csv"), mod_rows, mod_hdr)
 
+    override_counts = None
     if extra_handler:
-        extra_handler(out_dir, type_code, base_hdr, mod_hdr,
-                      current_rows, added_rows, removed_rows, mod_rows)
+        override_counts = extra_handler(out_dir, type_code, base_hdr, mod_hdr,
+                                        current_rows, added_rows, removed_rows, mod_rows,
+                                        context or {})
 
-    return len(current_rows), len(added), len(removed), len(mod_rows)
+    return override_counts if override_counts is not None else (
+        len(current_rows), len(added), len(removed), len(mod_rows)
+    )

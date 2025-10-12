@@ -11,7 +11,7 @@ from arinc_delta.core.common import (
 # tip modülleri
 from arinc_delta.types import pg, pi, pv, vhf
 
-REGION_AREA_MAP = {
+REGION_ALIAS_MAP = {
     "EU": {"EUR", "EEU"},
     "ME": {"MES"},
 }
@@ -24,28 +24,78 @@ def write_vhf_extras(out_dir: str,
                      current_rows,
                      added_rows,
                      removed_rows,
-                     mod_rows):
+                     mod_rows,
+                     context):
     if type_code != vhf.TYPE_CODE:
-        return
+        return None
 
-    def filter_vor(rows):
-        return [r for r in rows if r.get("navaid_class", "").startswith("V")]
+    region_requested = bool(context.get("region_requested"))
 
-    vor_current = filter_vor(current_rows)
-    if vor_current:
-        write_csv(os.path.join(out_dir, f"current_{type_code}_vor.csv"), vor_current, base_hdr)
+    def is_ils_dme(row):
+        raw = row.get("primary_1_123", "") or ""
+        return len(raw) >= 29 and raw[28].upper() == "I"
 
-    vor_added = filter_vor(added_rows)
-    if vor_added:
-        write_csv(os.path.join(out_dir, f"added_{type_code}_vor.csv"), vor_added, base_hdr)
+    def is_vor(row):
+        return (row.get("navaid_class", "") or "").upper().startswith("V")
 
-    vor_removed = filter_vor(removed_rows)
-    if vor_removed:
-        write_csv(os.path.join(out_dir, f"removed_{type_code}_vor.csv"), vor_removed, base_hdr)
+    # Remove default DV files; custom outputs will be written below.
+    for prefix in ("current", "added", "removed", "modified"):
+        default_path = os.path.join(out_dir, f"{prefix}_{type_code}.csv")
+        if os.path.exists(default_path):
+            os.remove(default_path)
 
-    vor_modified = filter_vor(mod_rows)
-    if vor_modified:
-        write_csv(os.path.join(out_dir, f"modified_{type_code}_vor.csv"), vor_modified, mod_hdr)
+    def write_rows(prefix: str, suffix: str, rows, header):
+        write_csv(os.path.join(out_dir, f"{prefix}_{suffix}.csv"), rows, header)
+
+    def rename_ident_fields(rows, old_key, new_key):
+        renamed = []
+        for r in rows:
+            new_row = dict(r)
+            if old_key in new_row:
+                new_row[new_key] = new_row.pop(old_key)
+            if new_row.get("changed_fields"):
+                parts = [new_key if x == old_key else x for x in new_row["changed_fields"].split(",") if x]
+                new_row["changed_fields"] = ",".join(parts)
+            renamed.append(new_row)
+        return renamed
+
+    def rename_header(header, old_key, new_key):
+        return [new_key if h == old_key else h for h in header]
+
+    ils_suffix = f"{type_code.lower()}_ils_dme"
+    ils_current = [r for r in current_rows if is_ils_dme(r)]
+    ils_added = [r for r in added_rows if is_ils_dme(r)]
+    ils_removed = [r for r in removed_rows if is_ils_dme(r)]
+    ils_modified = [r for r in mod_rows if is_ils_dme(r)]
+
+    write_rows("current", ils_suffix, ils_current, base_hdr)
+    write_rows("added", ils_suffix, ils_added, base_hdr)
+    write_rows("removed", ils_suffix, ils_removed, base_hdr)
+    write_rows("modified", ils_suffix, ils_modified, mod_hdr)
+
+    vor_suffix = f"{type_code.lower()}_vor"
+    vor_files = [os.path.join(out_dir, f"{prefix}_{vor_suffix}.csv")
+                 for prefix in ("current", "added", "removed", "modified")]
+
+    if region_requested:
+        vor_current = rename_ident_fields([r for r in current_rows if is_vor(r)], "ils_ident", "vor_ident")
+        vor_added = rename_ident_fields([r for r in added_rows if is_vor(r)], "ils_ident", "vor_ident")
+        vor_removed = rename_ident_fields([r for r in removed_rows if is_vor(r)], "ils_ident", "vor_ident")
+        vor_modified = rename_ident_fields([r for r in mod_rows if is_vor(r)], "ils_ident", "vor_ident")
+
+        vor_base_hdr = rename_header(base_hdr, "ils_ident", "vor_ident")
+        vor_mod_hdr = rename_header(mod_hdr, "ils_ident", "vor_ident")
+
+        write_rows("current", vor_suffix, vor_current, vor_base_hdr)
+        write_rows("added", vor_suffix, vor_added, vor_base_hdr)
+        write_rows("removed", vor_suffix, vor_removed, vor_base_hdr)
+        write_rows("modified", vor_suffix, vor_modified, vor_mod_hdr)
+    else:
+        for path in vor_files:
+            if os.path.exists(path):
+                os.remove(path)
+
+    return len(ils_current), len(ils_added), len(ils_removed), len(ils_modified)
 
 
 REGISTRY = {
@@ -61,7 +111,7 @@ def main():
     ap.add_argument("--out", default="delta_pg_pi_pv_out")
     ap.add_argument("--airport", default=None, help="ICAO filter (e.g., LTAC or LTAC,LTFM)")
     ap.add_argument("--area",    default=None, help="Area Code filter col(2–4) (e.g., EUU,TR1)")
-    ap.add_argument("--region",  default="EU,ME", help="Region presets: combinations of EU,ME (comma-separated). Use empty string for all.")
+    ap.add_argument("--region",  default="EUR,EEU,MES", help="Region presets: comma-separated list of area codes or aliases (e.g., EUR,EEU,MES or EU). Use empty string for all.")
     ap.add_argument("--types",   default="PG,PI,PV,DV", help="Comma: subset of PG,PI,PV,DV")
     args = ap.parse_args()
 
@@ -79,10 +129,16 @@ def main():
     if region_codes:
         region_area = set()
         for code in region_codes:
-            if code not in REGION_AREA_MAP:
-                raise SystemExit(f"Unknown region '{code}'. Allowed: {', '.join(sorted(REGION_AREA_MAP.keys()))}")
-            region_area.update(REGION_AREA_MAP[code])
+            mapped = REGION_ALIAS_MAP.get(code)
+            if mapped:
+                region_area.update(mapped)
+            else:
+                region_area.add(code)
     area_f = explicit_area if explicit_area is not None else region_area
+    execution_context = {
+        "region_requested": bool(region_codes),
+        "airport_requested": bool(icao_f),
+    }
 
     # read & filter
     old_lines = read_lines(args.old, selected_types, icao_f, area_f)
@@ -114,7 +170,8 @@ def main():
         _selected_type, cols, post, extra = REGISTRY[t]
         og = combine_groups(old_b.get(t, []))
         ng = combine_groups(new_b.get(t, []))
-        c,a,r,m = write_type_csvs(args.out, t, cols, post, og, ng, extra_handler=extra)
+        c,a,r,m = write_type_csvs(args.out, t, cols, post, og, ng,
+                                  extra_handler=extra, context=execution_context)
         summary_rows.append({"type": t, "current": c, "added": a, "removed": r, "modified": m})
         print(f"{t}: current={c} added={a} removed={r} modified={m}")
 

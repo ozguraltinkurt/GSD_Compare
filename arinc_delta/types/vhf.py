@@ -11,7 +11,7 @@ COLS = [
     ("airport_icao", (7, 10)),
     ("icao_code", (11, 12)),
     ("sub", (13, 13)),
-    ("vor_ident", (14, 17)),
+    ("ils_ident", (14, 17)),
     ("navaid_icao_code", (20, 21)),
     ("vor_frequency", (23, 27)),
     ("navaid_class", (28, 32)),
@@ -33,6 +33,6 @@ COLS = [
 
 def postprocess_row(row):
     # Strip padding from common textual fields for readability.
-    for key in ("vor_ident", "vor_name", "airport_icao"):
+    for key in ("ils_ident", "vor_name", "airport_icao"):
         if row.get(key):
             row[key] = row[key].strip()
