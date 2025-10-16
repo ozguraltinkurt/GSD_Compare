@@ -4,13 +4,10 @@ TYPE_CODE = "DV"
 SELECTED_TYPE = ("D", " ")
 
 COLS = [
-    ("record_type", (1, 1)),
     ("area_code", (2, 4)),
-    ("sec", (5, 5)),
     ("subsection_code", (6, 6)),
     ("airport_icao", (7, 10)),
     ("icao_code", (11, 12)),
-    ("sub", (13, 13)),
     ("ils_ident", (14, 17)),
     ("navaid_icao_code", (20, 21)),
     ("vor_frequency", (23, 27)),

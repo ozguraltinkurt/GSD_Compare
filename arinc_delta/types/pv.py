@@ -4,13 +4,10 @@ TYPE_CODE = "PV"
 SELECTED_TYPE = ("P","V")
 
 COLS = [
-    ("record_type", (1,1)),
     ("area_code", (2,4)),
-    ("sec", (5,5)),
     ("blank_6", (6,6)),
     ("icao", (7,10)),
     ("icao_code", (11,12)),
-    ("sub", (13,13)),
     ("communications_type", (14,16)),
     ("communications_frequency", (17,23)),
     ("guard_transmit", (24,24)),

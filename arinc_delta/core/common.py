@@ -197,14 +197,13 @@ def build_header_for_type(cols: List[Tuple[str, Optional[Tuple[int,int]]]],
             hdr.append(name)
     for cno in sorted(cont_numbers, key=lambda x: (len(x), x)):
         prefix = CONT_PREFIX_OVERRIDES.get(cno, f"cont#{cno}")
-        hdr.append(f"{prefix}_appl_code")
-        hdr.append(f"{prefix}_appl_label")
+        if prefix != "sim_cont":
+            hdr.append(f"{prefix}_appl_code")
+            hdr.append(f"{prefix}_appl_label")
         if cno in sim_cont_numbers:
             hdr.append(f"{prefix}_sim_facility_characteristics")
             hdr.append(f"{prefix}_sim_magnetic_variation")
             hdr.append(f"{prefix}_sim_facility_elevation")
-            hdr.append(f"{prefix}_sim_file_record_number")
-            hdr.append(f"{prefix}_sim_cycle_date")
         tail.append(f"{prefix}_1_123")
     hdr.extend(tail)
     return hdr

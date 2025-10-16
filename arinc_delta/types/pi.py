@@ -4,12 +4,9 @@ TYPE_CODE = "PI"
 SELECTED_TYPE = ("P","I")
 
 COLS = [
-    ("record_type", (1,1)),
     ("area_code", (2,4)),
-    ("sec", (5,5)),
     ("icao", (7,10)),
     ("icao_code", (11,12)),
-    ("sub", (13,13)),
     ("localizer_identifier", (14,17)),
     ("ils_category", (18,18)),
     ("localizer_frequency", (23,27)),
